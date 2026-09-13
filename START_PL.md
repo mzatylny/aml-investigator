@@ -4,6 +4,8 @@ Projekt AI/ML do wykrywania podejrzanych przepływów pieniędzy. Zawiera sieć 
 
 Wersja 0.2 dodaje GNN analizujący powiązane transakcje. Rozwijamy tutaj projekt AML; dane nie są transakcjami autoryzacji kartowych.
 
+Wersja 0.2.1 naprawia trzy błędy z przeglądu: limit alertów przy równych wynikach GNN, jednostki czasu w grafie i mieszanie modeli z różnych eksperymentów. Jeśli masz zapisane modele z poprzedniej wersji, przed wspólną oceną wytrenuj je ponownie: `python -m aml demo --gnn`. Program sprawdzi, czy oba pliki pochodzą z tego samego eksperymentu.
+
 ## Uruchomienie
 
 1. Rozpakuj ZIP i otwórz terminal w folderze `aml-investigator`.
@@ -42,6 +44,7 @@ Jeżeli aktywacja środowiska w PowerShell jest zablokowana, użyj bezpośrednio
 ## Co pokazać w portfolio
 
 - **Overview:** lista alertów, liczba transakcji do sprawdzenia, precision i recall. Suwak pokazuje wpływ progu na obciążenie analityka i liczbę błędnych alarmów.
+- Próg **1.01** wyłącza wszystkie alerty, również przy wynikach modelu równych 1.
 - **Investigation:** wybór transakcji i graf przepływów. Złoty kolor wskazuje wybrany przelew; strzałki pokazują kierunek. Wyświetlana historia pochodzi z poprzednich 24 godzin.
 - **Graph neural network:** sieć transakcji, z których GNN pobiera informacje. Węzeł oznacza transakcję, a strzałka przepływ informacji od wcześniejszej do późniejszej transakcji. To inny graf niż graf kont i przelewów z Investigation.
 - **Model & evaluation:** wyniki na odłożonym okresie, porównanie z regułami, wykres precision–recall oraz znaczenie cech.

@@ -14,6 +14,7 @@ from torch import nn
 from sklearn.metrics import average_precision_score
 from .data import validate_transactions
 from .features import FEATURES, build_features
+from .model import alert_mask
 
 GRAPH_SCHEMA = 1
 
@@ -23,7 +24,8 @@ def temporal_edges(transactions, max_neighbors=8, window_hours=24):
     if max_neighbors < 1 or window_hours <= 0:
         raise ValueError("Graph neighbour count and history window must be positive.")
     tx = validate_transactions(transactions)
-    times = tx.timestamp.array.asi8
+    # asi8 follows the array's resolution; Timedelta.value is always nanoseconds.
+    times = tx.timestamp.dt.as_unit("ns").array.asi8
     window = pd.Timedelta(hours=window_hours).value
     histories = defaultdict(lambda: deque(maxlen=max_neighbors))
     edges = []
@@ -94,6 +96,7 @@ class GraphSAGEBundle:
     max_neighbors: int = 8
     window_hours: int = 24
     hidden: int = 32
+    run_id: str | None = None
 
     def predict(self, features, edges):
         values = np.clip((feature_values(features) - self.mean) / self.scale, -5, 5)
@@ -179,6 +182,7 @@ def save_graphsage(bundle, path):
         "threshold": bundle.threshold, "max_neighbors": bundle.max_neighbors,
         "window_hours": bundle.window_hours, "hidden": bundle.hidden,
         "torch_version": str(torch.__version__),
+        "run_id": bundle.run_id,
     }, path)
 
 
@@ -189,7 +193,8 @@ def load_graphsage(path):
     model = TemporalGraphSAGE(hidden=state["hidden"])
     model.load_state_dict(state["state_dict"])
     return GraphSAGEBundle(model, state["mean"].numpy(), state["scale"].numpy(),
-                           state["threshold"], state["max_neighbors"], state["window_hours"], state["hidden"])
+                           state["threshold"], state["max_neighbors"], state["window_hours"], state["hidden"],
+                           state.get("run_id"))
 
 
 def score_graphsage(bundle, transactions, history=None):
@@ -206,5 +211,5 @@ def score_graphsage(bundle, transactions, history=None):
     tx, features = build_features(current)
     edges = temporal_edges(tx, bundle.max_neighbors, bundle.window_hours)
     tx["gnn_score"] = bundle.predict(features, edges)
-    tx["gnn_alert"] = tx.gnn_score.ge(bundle.threshold)
+    tx["gnn_alert"] = alert_mask(tx.gnn_score, bundle.threshold)
     return tx[tx.transaction_id.isin(ids)].reset_index(drop=True)

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import math
+from uuid import uuid4
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
@@ -32,6 +33,8 @@ def chronological_split(tx):
 
 def threshold_for_budget(scores, budget=0.05):
     """Most inclusive threshold with <= budget alerts on validation, including ties."""
+    source_dtype = np.asarray(scores).dtype
+    comparison_dtype = source_dtype if np.issubdtype(source_dtype, np.floating) else np.dtype(float)
     scores = np.asarray(scores, dtype=float)
     if not 0 < budget <= 1 or len(scores) == 0 or not np.isfinite(scores).all():
         raise ValueError("Budget must be in (0, 1] and scores finite and non-empty.")
@@ -39,12 +42,29 @@ def threshold_for_budget(scores, budget=0.05):
     values, counts = np.unique(scores, return_counts=True)
     totals = np.cumsum(counts[::-1])
     allowed = values[::-1][totals <= permitted]
-    return float(allowed[-1]) if len(allowed) else float(np.nextafter(scores.max(), np.inf))
+    if len(allowed):
+        return float(allowed[-1])
+    # The no-alert threshold must remain above the maximum in the source dtype.
+    maximum = np.asarray(scores.max(), dtype=comparison_dtype)
+    return float(np.nextafter(maximum, np.asarray(np.inf, dtype=comparison_dtype)))
+
+
+def alert_mask(scores, threshold):
+    """Use the same comparison precision for saved flags, reports and the UI."""
+    return np.asarray(scores, dtype=np.float64) >= np.float64(threshold)
+
+
+def validate_model_pair(forest_bundle, gnn_bundle):
+    """Reject models from different (or unidentified legacy) training runs."""
+    run_id = forest_bundle.get("run_id")
+    if not run_id or run_id != gnn_bundle.run_id:
+        raise ValueError("Forest and GraphSAGE checkpoints must come from the same identified experiment. "
+                         "Retrain both together with --gnn and use the matching output files.")
 
 
 def evaluate(y, scores, threshold, budget=0.05):
     y, scores = np.asarray(y, dtype=int), np.asarray(scores, dtype=float)
-    predicted = scores >= threshold
+    predicted = alert_mask(scores, threshold)
     tp, fp = int(np.sum(predicted & (y == 1))), int(np.sum(predicted & (y == 0)))
     fn, tn = int(np.sum(~predicted & (y == 1))), int(np.sum(~predicted & (y == 0)))
     k = max(1, math.floor(len(y) * budget))
@@ -79,10 +99,10 @@ def run_experiment(transactions, seed=42, budget=0.05, with_gnn=False, gnn_epoch
     tx["rule_score"] = rule_scores(features)
     threshold = threshold_for_budget(tx.loc[validation, "risk_score"], budget)
     rule_threshold = threshold_for_budget(tx.loc[validation, "rule_score"], budget)
-    tx["alert"] = tx.risk_score.ge(threshold)
+    tx["alert"] = alert_mask(tx.risk_score, threshold)
     tx["evidence"] = evidence(features)
     report = {
-        "seed": seed, "data": "synthetic", "validation_alert_budget": budget,
+        "run_id": uuid4().hex, "seed": seed, "data": "synthetic", "validation_alert_budget": budget,
         "features": FEATURES, "model_parameters": model.get_params(),
         "splits": {
             name: {"rows": int(mask.sum()), "start": tx.loc[mask, "timestamp"].min().isoformat(),
@@ -105,8 +125,9 @@ def run_experiment(transactions, seed=42, budget=0.05, with_gnn=False, gnn_epoch
         from .gnn import train_graphsage
         bundle, scores, edges, metadata = train_graphsage(tx, features, seed=seed, epochs=gnn_epochs)
         bundle.threshold = threshold_for_budget(scores[validation], budget)
+        bundle.run_id = report["run_id"]
         tx["gnn_score"] = scores
-        tx["gnn_alert"] = tx.gnn_score.ge(bundle.threshold)
+        tx["gnn_alert"] = alert_mask(tx.gnn_score, bundle.threshold)
         report["gnn"] = metadata
         report["test"]["graphsage"] = evaluate(tx.loc[test, "is_laundering"], scores[test], bundle.threshold, budget)
         if "pattern" in tx:
@@ -132,7 +153,7 @@ def score_transactions(model, transactions, threshold, history=None):
     current = current.drop(columns=["is_laundering", "pattern", "scenario_id"], errors="ignore")
     tx, features = build_features(current)
     tx["risk_score"] = model.predict_proba(features[FEATURES])[:, 1]
-    tx["alert"] = tx.risk_score.ge(threshold)
+    tx["alert"] = alert_mask(tx.risk_score, threshold)
     tx["rule_score"] = rule_scores(features)
     tx["evidence"] = evidence(features)
     return tx[tx.transaction_id.isin(ids)].reset_index(drop=True)

@@ -6,7 +6,7 @@ import streamlit as st
 from aml.__main__ import read_transactions
 from aml.data import generate_transactions
 from aml.features import FEATURES
-from aml.model import evaluate, run_experiment, score_transactions
+from aml.model import alert_mask, evaluate, run_experiment, score_transactions
 from aml.plots import GOLD, TEAL, gnn_network_figure, network_figure, pr_figure, style
 
 st.set_page_config(page_title="AML Investigator", page_icon="◎", layout="wide")
@@ -50,9 +50,12 @@ selected_threshold = experiment.gnn.threshold if detector == "GraphSAGE" else ex
 overview, investigation, graph_tab, validation, imported = st.tabs(["Overview", "Investigation", "Graph neural network", "Model & evaluation", "Import CSV"])
 
 with overview:
-    threshold = st.slider("Review threshold", min_value=0.0, max_value=1.0,
-                          value=float(min(selected_threshold, 1)), step=0.01, key=f"threshold_{detector}_{seed}")
+    threshold = st.slider("Review threshold", min_value=0.0, max_value=1.01,
+                          value=1.01 if selected_threshold > 1 else float(selected_threshold),
+                          step=0.01, key=f"threshold_{detector}_{seed}")
     st.caption(f"{detector} validation-selected threshold: {selected_threshold:.4f}. Moving this control explores test outcomes; it does not change the saved evaluation.")
+    st.caption("Set the threshold to 1.01 to disable all alerts, including scores equal to 1.")
+    review = alert_mask(test[score_column], threshold)
     metrics = evaluate(test.is_laundering, test[score_column], threshold)
     cols = st.columns(4)
     for column, label, value in zip(cols, ["Test transactions", "Review queue", "Precision", "Recall"],
@@ -61,14 +64,14 @@ with overview:
     left, right = st.columns([1.4, 1])
     with left:
         st.subheader("Daily review volume")
-        daily = test.assign(day=test.timestamp.dt.date, review=test[score_column].ge(threshold)).groupby("day").agg(
+        daily = test.assign(day=test.timestamp.dt.date, review=review).groupby("day").agg(
             Transactions=("transaction_id", "size"), Alerts=("review", "sum")).reset_index()
         st.plotly_chart(style(px.bar(daily, x="day", y="Alerts", color_discrete_sequence=[TEAL])), width="stretch")
     with right:
         st.subheader("Risk score distribution")
         st.plotly_chart(style(px.histogram(test, x=score_column, nbins=35, color_discrete_sequence=[TEAL])), width="stretch")
     st.subheader("Prioritised review queue")
-    queue = test[test[score_column].ge(threshold)].sort_values(score_column, ascending=False)
+    queue = test[review].sort_values(score_column, ascending=False)
     columns = ["transaction_id", "timestamp", "sender", "receiver", "amount", score_column, "evidence"]
     st.dataframe(queue[columns], hide_index=True, width="stretch")
     st.download_button("Download review queue", queue[columns].to_csv(index=False), "aml_review_queue.csv", "text/csv")

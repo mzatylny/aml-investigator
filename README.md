@@ -18,6 +18,8 @@ An end-to-end portfolio project for exploring suspicious money flows. It generat
 
 Version 0.2 adds GraphSAGE, a model selector, a transaction-neighbourhood view, checkpoint export and GNN leakage tests. The data remains synthetic AML transfers; this is not a validated card-authorisation fraud dataset.
 
+Version 0.2.1 fixes tied-score alert thresholds, normalises timestamp units for the 24-hour graph window, and prevents mixing checkpoints from different experiments. Regression tests cover all three review findings.
+
 The default demo uses **500 accounts and 90 days**. It requires no bank access, cloud service, API key or external dataset download. Dependencies are downloaded during installation; the application then runs locally.
 
 ## Quick start
@@ -143,6 +145,10 @@ python -m aml score --input new_transactions.csv --model artifacts/model.joblib 
 Pass `--history earlier_transactions.csv` to initialise the rolling features. All history must end strictly before the first new transaction, with no duplicate IDs across files. Otherwise inference starts with an empty history, and early scores may differ from a full replay. Only load trusted models you trained locally: Joblib files are executable Python serialisations. Retrain after changing the scikit-learn version or feature schema.
 
 GNN predictions may require up to **72 hours of raw history**: two 24-hour message hops plus the neighbours' 24-hour feature windows. Providing the full earlier history reproduces the training replay. The PyTorch checkpoint contains a state dictionary and normalisation tensors and is loaded with `weights_only=True`. Omit `--gnn`/`--gnn-model` for the original forest/rule workflow.
+
+Both checkpoints and `metrics.json` now carry the same `run_id`. Combined scoring rejects mismatched or unidentified checkpoints before reading the transaction file. **After upgrading from 0.2, retrain both models together with `python -m aml demo --gnn`** to use combined scoring. Reusing an output directory for a baseline-only experiment removes the four generated GNN files (`graphsage.pt`, `gnn_training.csv`, `graph_edges.csv`, `gnn_network.html`); unrelated files are preserved.
+
+Alert flags, metrics and the dashboard share the same comparison precision. When a tied top score cannot fit the review budget, the selected threshold remains strictly above it in the score's numeric type. The dashboard threshold 1.01 explicitly disables all alerts, even when a model score equals 1.
 
 ## Tests
 

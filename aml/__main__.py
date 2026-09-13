@@ -8,8 +8,10 @@ import pandas as pd
 import sklearn
 from .data import generate_transactions
 from .features import FEATURES
-from .model import run_experiment, score_transactions
+from .model import run_experiment, score_transactions, validate_model_pair
 from .plots import pr_figure
+
+GNN_OUTPUT_FILES = ("graphsage.pt", "gnn_training.csv", "graph_edges.csv", "gnn_network.html")
 
 
 def read_transactions(source):
@@ -20,12 +22,17 @@ def write_experiment(experiment, output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     tx, report = experiment.transactions, experiment.report
+    if experiment.gnn is None:
+        # These names belong to this exporter; preserve unrelated user files.
+        for name in GNN_OUTPUT_FILES:
+            (output / name).unlink(missing_ok=True)
     tx.query("split == 'test'").to_csv(output / "test_scores.csv", index=False)
     (output / "metrics.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     importance = pd.DataFrame({"feature": FEATURES, "importance": experiment.model.feature_importances_})
     importance.sort_values("importance", ascending=False).to_csv(output / "feature_importance.csv", index=False)
     joblib.dump({"model": experiment.model, "threshold": experiment.threshold,
-                 "features": FEATURES, "sklearn_version": sklearn.__version__}, output / "model.joblib")
+                 "features": FEATURES, "sklearn_version": sklearn.__version__,
+                 "run_id": report["run_id"]}, output / "model.joblib")
     if experiment.gnn is not None:
         from .gnn import save_graphsage
         from .plots import gnn_network_figure
@@ -114,11 +121,15 @@ def main():
             bundle = joblib.load(args.model)
             if bundle.get("sklearn_version") != sklearn.__version__ or bundle.get("features") != FEATURES:
                 raise ValueError("Model version/schema differs. Retrain with this environment.")
-            history = read_transactions(args.history) if args.history else None
-            scores = score_transactions(bundle["model"], read_transactions(args.input), bundle["threshold"], history)
+            gnn_bundle = None
             if args.gnn_model:
                 from .gnn import load_graphsage, score_graphsage
-                gnn_scores = score_graphsage(load_graphsage(args.gnn_model), read_transactions(args.input), history)
+                gnn_bundle = load_graphsage(args.gnn_model)
+                validate_model_pair(bundle, gnn_bundle)
+            history = read_transactions(args.history) if args.history else None
+            scores = score_transactions(bundle["model"], read_transactions(args.input), bundle["threshold"], history)
+            if gnn_bundle is not None:
+                gnn_scores = score_graphsage(gnn_bundle, read_transactions(args.input), history)
                 scores = scores.merge(gnn_scores[["transaction_id", "gnn_score", "gnn_alert"]], on="transaction_id", validate="one_to_one")
             Path(args.output).parent.mkdir(parents=True, exist_ok=True)
             scores.to_csv(args.output, index=False)

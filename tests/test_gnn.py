@@ -5,7 +5,7 @@ import torch
 from aml.data import generate_transactions
 from aml.features import build_features
 from aml.gnn import MeanSAGE, feature_values, load_graphsage, save_graphsage, score_graphsage, temporal_edges
-from aml.model import run_experiment
+from aml.model import evaluate, run_experiment
 from aml.plots import gnn_network_figure
 
 
@@ -33,6 +33,20 @@ def test_edges_are_strictly_causal_and_expire():
     assert not (edges[1] < 2).any()
     assert not (edges[1] == 4).any()
     assert {(0, 2), (1, 2), (2, 3)}.issubset(set(map(tuple, edges.T)))
+
+
+@pytest.mark.parametrize("unit", ["ns", "us", "ms", "s"])
+def test_graph_window_is_independent_of_timestamp_resolution(unit):
+    tx = pd.DataFrame({
+        "transaction_id": ["T0", "T1", "T2", "T3"],
+        "timestamp": ["2025-01-01T10:00:00Z", "2025-01-02T10:00:00Z", "2025-01-02T10:00:01Z", "2025-01-08T10:00:00Z"],
+        "sender": ["A"] * 4, "receiver": ["B", "C", "D", "E"],
+        "amount": [100.] * 4, "currency": ["EUR"] * 4,
+    })
+    expected = temporal_edges(tx)
+    tx["timestamp"] = pd.to_datetime(tx.timestamp, utc=True).astype(f"datetime64[{unit}, UTC]")
+    np.testing.assert_array_equal(temporal_edges(tx), expected)
+    assert set(map(tuple, expected.T)) == {(0, 1), (1, 2)}
 
 
 def test_edges_are_unique_capped_and_prefix_invariant():
@@ -90,9 +104,19 @@ def test_checkpoint_and_history_inference_match_replay(experiment, tmp_path):
     scored = score_graphsage(restored, current, tx.iloc[:200])
     np.testing.assert_allclose(scored.gnn_score, tx.gnn_score.iloc[200:], atol=1e-6)
     assert restored.threshold == experiment.gnn.threshold
+    assert restored.run_id == experiment.report["run_id"]
     assert scored.transaction_id.tolist() == current.transaction_id.tolist()
     with pytest.raises(ValueError, match="strictly before"):
         score_graphsage(restored, current, tx)
+
+
+def test_inference_flags_agree_with_report_for_legacy_threshold(experiment, monkeypatch):
+    scores = np.full(20, .7, dtype=np.float32)
+    threshold = float(np.nextafter(float(scores.max()), np.inf))
+    monkeypatch.setattr(experiment.gnn, "predict", lambda features, edges: np.full(len(features), .7, dtype=np.float32))
+    monkeypatch.setattr(experiment.gnn, "threshold", threshold)
+    scored = score_graphsage(experiment.gnn, experiment.transactions.head(20))
+    assert int(scored.gnn_alert.sum()) == evaluate([1] + [0] * 19, scored.gnn_score, threshold)["alerts"] == 0
 
 
 def test_test_labels_do_not_select_weights_or_threshold(experiment):

@@ -6,6 +6,8 @@ Every transaction is a node with 13 causal numeric features. A directed edge `j 
 
 This is a transaction-neighbourhood graph. Its edges represent information flow, not the direction of money. The account graph in the Investigation tab still shows sender-to-receiver money transfers. Sharing an account is not sufficient evidence that transactions belong to a laundering operation.
 
+Version 0.2.1 converts timestamps to nanoseconds before applying the window. Equivalent timestamps supplied at second, millisecond, microsecond or nanosecond resolution now produce the same edges, including the exact 24-hour boundary.
+
 For the default seed-42 experiment the graph has 26,327 transaction nodes and 73,433 temporal edges.
 
 ## Architecture
@@ -58,6 +60,8 @@ The node colours and displayed graph show context and model scores. They are not
 ## Saving and scoring
 
 Training writes `graphsage.pt` with model weights, normalisation tensors, feature names, graph settings and threshold. Loading uses `torch.load(..., weights_only=True, map_location="cpu")` and checks the schema. The archive ships source and example results, not pretrained binary checkpoints.
+
+Checkpoints exported by 0.2.1 also include the experiment's `run_id`, shared with the forest and metrics report. Combined CLI scoring requires matching, non-empty IDs. Retrain legacy checkpoint pairs together to obtain these identifiers. Baseline-only exports remove previous generated GNN outputs from the selected directory, so a stale network cannot be silently reused alongside a new forest.
 
 ```bash
 python -m aml score --input new_transactions.csv --history earlier_transactions.csv --model artifacts/model.joblib --gnn-model artifacts/graphsage.pt --output scores.csv

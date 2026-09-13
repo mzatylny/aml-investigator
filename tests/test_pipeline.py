@@ -4,7 +4,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from aml.data import generate_transactions, validate_transactions
 from aml.features import FEATURES, build_features
-from aml.model import chronological_split, evaluate, run_experiment, score_transactions, threshold_for_budget
+from aml.model import alert_mask, chronological_split, evaluate, run_experiment, score_transactions, threshold_for_budget
 from aml.plots import network_figure
 
 
@@ -96,6 +96,30 @@ def test_threshold_respects_budget_with_ties():
     assert threshold == .9
     assert (scores >= threshold).sum() == 4
     assert threshold_for_budget(np.ones(20), .05) > 1
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("value", [.7, 1.0])
+def test_tied_scores_cannot_exceed_budget_in_any_comparison(dtype, value):
+    scores = np.full(20, value, dtype=dtype)
+    threshold = threshold_for_budget(scores, .05)
+    assert not (scores >= threshold).any()
+    assert not pd.Series(scores).ge(threshold).any()
+    assert not alert_mask(scores, threshold).any()
+    assert evaluate([1] + [0] * 19, scores, threshold)["alerts"] == 0
+
+
+def test_float32_budget_smaller_than_one_review_slot():
+    scores = np.array([.6, .7], dtype=np.float32)
+    threshold = threshold_for_budget(scores, .05)
+    assert not (scores >= threshold).any()
+
+
+def test_existing_float64_threshold_is_applied_consistently_to_float32_scores():
+    scores = np.full(20, .7, dtype=np.float32)
+    old_threshold = float(np.nextafter(float(scores.max()), np.inf))
+    assert not alert_mask(scores, old_threshold).any()
+    assert evaluate([1] + [0] * 19, scores, old_threshold)["alerts"] == 0
 
 
 def test_split_is_chronological_and_scenarios_do_not_cross(data):
